@@ -12,8 +12,8 @@ android {
         applicationId = "de.limad.tvlauncher"
         minSdk = 25
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.2.1"
+        versionCode = 7
+        versionName = "1.4.0"
     }
 
     // Fixed key so every CI build can update the installed app (debug keys differ per runner).
@@ -57,4 +57,5 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("io.coil-kt:coil-compose:2.7.0")
 }

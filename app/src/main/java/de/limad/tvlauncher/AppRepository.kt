@@ -17,6 +17,10 @@ data class AppEntry(
     val tint: Int,
     /** Tiny version of the artwork; drawn full-screen it becomes a soft blurred backdrop. */
     val backdrop: ImageBitmap,
+    /** Banner fills the tile edge to edge (no transparent margins). */
+    val opaque: Boolean,
+    /** Square launcher icon (used by the glow tiles). */
+    val squareIcon: ImageBitmap,
 )
 
 object AppRepository {
@@ -59,6 +63,8 @@ object AppRepository {
                     isBanner = banner != null,
                     intent = launch,
                     tint = averageColor(bitmap),
+                    opaque = banner != null && isOpaque(bitmap),
+                    squareIcon = ri.loadIcon(pm).toBitmap(192, 192, Bitmap.Config.ARGB_8888).asImageBitmap(),
                     backdrop = if (banner != null) {
                         Bitmap.createScaledBitmap(bitmap, 128, 72, true).asImageBitmap()
                     } else {
@@ -68,6 +74,11 @@ object AppRepository {
             }
         }
         return result.values.sortedBy { it.label.lowercase() }
+    }
+
+    private fun isOpaque(b: Bitmap): Boolean {
+        val pts = listOf(2 to 2, b.width - 3 to 2, 2 to b.height - 3, b.width - 3 to b.height - 3, b.width / 2 to 2)
+        return pts.all { (x, y) -> (b.getPixel(x, y) ushr 24) > 200 }
     }
 
     /** Opaque average colour, ignoring transparent pixels. */

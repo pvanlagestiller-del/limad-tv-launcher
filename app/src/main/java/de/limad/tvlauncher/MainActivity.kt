@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         favStore = Favorites(this)
+        handleIntent(intent)
 
         // A launcher must not close on Back.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -59,6 +60,20 @@ class MainActivity : ComponentActivity() {
                     delay(30 * 60 * 1000L)
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    /** Setup wizard sends the TMDB token: am start -n de.limad.tvlauncher/.MainActivity --es tmdb_token … */
+    private fun handleIntent(intent: Intent?) {
+        val token = intent?.getStringExtra("tmdb_token")?.trim()
+        if (!token.isNullOrEmpty()) {
+            Tmdb.saveToken(this, token)
+            Toast.makeText(this, "Titelbilder aktiviert", Toast.LENGTH_SHORT).show()
         }
     }
 
