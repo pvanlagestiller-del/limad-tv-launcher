@@ -90,6 +90,7 @@ class MainActivity : ComponentActivity(), Actions {
 
     override fun onResume() {
         super.onResume()
+        HomeButtonService.endSystemUi()
         lastInput = SystemClock.elapsedRealtime()
         ui.screensaver = false
         ui.wifi = networkInfo()
@@ -155,6 +156,8 @@ class MainActivity : ComponentActivity(), Actions {
     }
 
     private fun start(intent: Intent, fallback: Intent? = null) {
+        // Fire OS settings live inside the Amazon launcher: pause the home redirect for them.
+        if (intent.action?.startsWith("android.settings.") == true) HomeButtonService.allowSystemUi()
         try {
             startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         } catch (e: Exception) {
