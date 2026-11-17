@@ -23,6 +23,8 @@ class MainActivity : ComponentActivity() {
     private val apps = mutableStateOf<List<AppEntry>>(emptyList())
     private val favorites = mutableStateOf<List<String>>(emptyList())
     private val weather = mutableStateOf("")
+    private val lastOpened = mutableStateOf<String?>(null)
+    private var allApps: List<AppEntry> = emptyList()
     private lateinit var favStore: Favorites
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -38,12 +40,14 @@ class MainActivity : ComponentActivity() {
             LauncherScreen(
                 apps = apps.value,
                 favorites = favorites.value,
+                lastOpened = lastOpened.value,
                 weather = weather.value,
                 onOpen = ::openApp,
                 onMenu = ::showMenu,
                 onSettings = ::openSettings,
                 onMeteo = ::openMeteo,
                 onWeatherMenu = ::askPlace,
+                onManage = ::manageApps,
             )
         }
 
@@ -65,8 +69,12 @@ class MainActivity : ComponentActivity() {
 
     private fun reload() {
         val all = AppRepository.load(this)
-        apps.value = all
-        favorites.value = favStore.get(all)
+        allApps = all
+        val hidden = favStore.hidden(all)
+        val visible = all.filter { it.pkg !in hidden }
+        apps.value = visible
+        favorites.value = favStore.get(visible)
+        if (lastOpened.value == null) lastOpened.value = favStore.lastOpened ?: favorites.value.firstOrNull()
     }
 
     private suspend fun refreshWeather() {
@@ -87,7 +95,28 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun openApp(app: AppEntry) = start(Intent(app.intent))
+    private fun openApp(app: AppEntry) {
+        favStore.lastOpened = app.pkg
+        lastOpened.value = app.pkg
+        start(Intent(app.intent))
+    }
+
+    /** Multi-choice list of all installed apps; checked = shown. */
+    private fun manageApps() {
+        val all = allApps
+        val hidden = favStore.hidden(all).toMutableSet()
+        val labels = all.map { it.label }.toTypedArray()
+        val shown = all.map { it.pkg !in hidden }.toBooleanArray()
+        AlertDialog.Builder(this)
+            .setTitle("Angezeigte Apps")
+            .setMultiChoiceItems(labels, shown) { _, which, checked -> shown[which] = checked }
+            .setPositiveButton("Speichern") { _, _ ->
+                favStore.setHidden(all.filterIndexed { i, _ -> !shown[i] }.map { it.pkg }.toSet())
+                reload()
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
 
     private fun openSettings() = start(Intent(Settings.ACTION_SETTINGS))
 
@@ -125,9 +154,9 @@ class MainActivity : ComponentActivity() {
         val favs = favorites.value.toMutableList()
         val isFav = app.pkg in favs
         val options = if (isFav) {
-            arrayOf(MOVE_LEFT, MOVE_RIGHT, REMOVE_FAV, APP_INFO)
+            arrayOf(MOVE_LEFT, MOVE_RIGHT, REMOVE_FAV, HIDE, APP_INFO)
         } else {
-            arrayOf(ADD_FAV, APP_INFO)
+            arrayOf(ADD_FAV, HIDE, APP_INFO)
         }
 
         AlertDialog.Builder(this)
@@ -139,6 +168,13 @@ class MainActivity : ComponentActivity() {
                     MOVE_RIGHT -> if (i in 0 until favs.size - 1) { favs.removeAt(i); favs.add(i + 1, app.pkg) }
                     REMOVE_FAV -> favs.remove(app.pkg)
                     ADD_FAV -> favs.add(app.pkg)
+                    HIDE -> {
+                        favStore.setHidden(favStore.hidden(allApps) + app.pkg)
+                        favs.remove(app.pkg)
+                        favStore.set(favs)
+                        reload()
+                        return@setItems
+                    }
                     APP_INFO -> {
                         start(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.pkg}")))
                         return@setItems
@@ -156,5 +192,6 @@ class MainActivity : ComponentActivity() {
         const val REMOVE_FAV = "Aus Favoriten entfernen"
         const val ADD_FAV = "Zu Favoriten hinzufügen"
         const val APP_INFO = "App-Info"
+        const val HIDE = "Ausblenden"
     }
 }
