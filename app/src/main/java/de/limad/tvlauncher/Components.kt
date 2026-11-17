@@ -54,7 +54,14 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-enum class Tab(val label: String) { START("Start"), FILME("Filme"), SERIEN("Serien"), APPS("Apps"), SUCHE("Suche") }
+enum class Tab(val label: String) {
+    START("Start"), ENTDECKEN("Entdecken"), FILME("Filme"), SERIEN("Serien"), LISTE("Meine Liste"), APPS("Apps"), SUCHE("Suche");
+
+    companion object {
+        /** Tabs shown in the segmented control (search has its own button). */
+        val bar = listOf(START, ENTDECKEN, FILME, SERIEN, LISTE, APPS)
+    }
+}
 
 // ---------------------------------------------------------------- Top bar
 
@@ -66,6 +73,10 @@ fun TopBar(
     onAvatar: () -> Unit,
     onBack: (() -> Unit)?,
     tabModifier: (Tab) -> Modifier = { Modifier },
+    onSearch: (() -> Unit)? = null,
+    onControl: (() -> Unit)? = null,
+    wifi: String? = null,
+    profile: Profile? = null,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -75,23 +86,57 @@ fun TopBar(
             CircleButton(Ic.BACK, onBack)
             Spacer(Modifier.width(16.dp))
         }
-        LogoMark(30.dp)
+        LogoMark(28.dp)
         Spacer(Modifier.width(10.dp))
-        BasicText("LiMaD-TV", style = ts(24, FontWeight.Bold))
+        BasicText("LiMaD-TV", style = ts(22, FontWeight.Bold))
+        Spacer(Modifier.weight(1f))
         if (tab != null) {
-            Spacer(Modifier.width(44.dp))
             Row(Modifier.glass(RoundedCornerShape(50)).padding(4.dp)) {
-                Tab.entries.forEach { t -> Segment(t.label, t == tab, tabModifier(t)) { onTab(t) } }
+                Tab.bar.forEach { t -> Segment(t.label, t == tab, tabModifier(t)) { onTab(t) } }
             }
         }
         Spacer(Modifier.weight(1f))
-        if (onBell != null) {
-            CircleButton(Ic.BELL, onBell)
-            Spacer(Modifier.width(14.dp))
+        if (wifi != null) {
+            Box(Modifier.size(7.dp).clip(CircleShape).background(if (wifi.startsWith("Verbunden")) Color(0xFF4ADE80) else Color(0xFFF87171)))
+            Spacer(Modifier.width(6.dp))
+            BasicText("WLAN", style = ts(14, FontWeight.Medium, Color(0xE6FFFFFF)))
+            Spacer(Modifier.width(16.dp))
         }
-        CircleButton(Ic.PERSON, onAvatar)
-        Spacer(Modifier.width(20.dp))
+        if (onSearch != null) {
+            CircleButton(Ic.SEARCH, onSearch, 40.dp)
+            Spacer(Modifier.width(10.dp))
+        }
+        if (onControl != null) {
+            CircleButton(Ic.SLIDERS, onControl, 40.dp)
+            Spacer(Modifier.width(10.dp))
+        }
+        if (onBell != null) {
+            CircleButton(Ic.BELL, onBell, 40.dp)
+            Spacer(Modifier.width(10.dp))
+        }
         Clock()
+        Spacer(Modifier.width(14.dp))
+        AvatarButton(profile, onAvatar)
+    }
+}
+
+@Composable
+private fun AvatarButton(profile: Profile?, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val color = profile?.let { Color(ProfileColors[it.color % ProfileColors.size]) } ?: C.Blue
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(40.dp)
+            .glow(focused, radius = 14.dp, corner = 20.dp)
+            .clip(CircleShape)
+            .background(Brush.linearGradient(listOf(lerp(color, Color.White, 0.2f), lerp(color, Color.Black, 0.3f))))
+            .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color(0x55FFFFFF), CircleShape)
+            .onFocusChanged { focused = it.isFocused }
+            .okKeys(onClick)
+            .focusable(),
+    ) {
+        if (profile != null) BasicText(profile.name.take(1).uppercase(), style = ts(17, FontWeight.Bold)) else Icon(Ic.PERSON, 20.dp)
     }
 }
 
@@ -324,6 +369,43 @@ fun PosterCard(t: Title, width: Dp, onClick: () -> Unit, onFocused: () -> Unit =
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 14.dp, vertical = 12.dp),
             style = ts(17, FontWeight.Black).copy(lineHeight = 19.sp, letterSpacing = 0.3.sp),
+        )
+        Box(Modifier.fillMaxSize().border(if (focused) 3.dp else 1.dp, if (focused) Color.White else Color(0x1FFFFFFF), shape))
+    }
+}
+
+/** Top-10 card: big outlined rank number over the backdrop. */
+@Composable
+fun RankCard(rank: Int, t: Title, width: Dp, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) 1.08f else 1f, tween(170), label = "rank")
+    val shape = RoundedCornerShape(14.dp)
+    Box(
+        Modifier
+            .width(width)
+            .aspectRatio(4f / 3f)
+            .zIndex(if (focused) 1f else 0f)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .glow(focused, radius = 20.dp, corner = 14.dp)
+            .clip(shape)
+            .background(C.Card)
+            .onFocusChanged { focused = it.isFocused }
+            .okKeys(onClick)
+            .focusable()
+    ) {
+        AsyncImage(t.backdropUrl("w780"), t.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color(0x99000000), 0.4f to Color.Transparent, 1f to Color(0xCC000000))))
+        BasicText(
+            "$rank",
+            modifier = Modifier.padding(start = 10.dp, top = 2.dp),
+            style = ts(54, FontWeight.Black).copy(lineHeight = 58.sp),
+        )
+        BasicText(
+            t.title,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.align(Alignment.BottomStart).padding(10.dp),
+            style = ts(14, FontWeight.Bold),
         )
         Box(Modifier.fillMaxSize().border(if (focused) 3.dp else 1.dp, if (focused) Color.White else Color(0x1FFFFFFF), shape))
     }

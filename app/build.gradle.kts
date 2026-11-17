@@ -12,8 +12,8 @@ android {
         applicationId = "de.limad.tvlauncher"
         minSdk = 25
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.5.0"
+        versionCode = 9
+        versionName = "2.0.0"
     }
 
     // Fixed key so every CI build can update the installed app (debug keys differ per runner).

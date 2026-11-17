@@ -120,7 +120,7 @@ fun Modifier.okKeys(onClick: () -> Unit, onLong: (() -> Unit)? = null): Modifier
 
 // ---------------------------------------------------------------- Line icons
 
-enum class Ic { PLAY, PLUS, CHECK, INFO, BELL, BACK, STAR, STAR_FILLED, GEAR, MONITOR, WIFI, GRID, PERSON, SYSTEM, CHEVRON, SEARCH }
+enum class Ic { PLAY, PLUS, CHECK, INFO, BELL, BACK, STAR, STAR_FILLED, GEAR, MONITOR, WIFI, GRID, PERSON, SYSTEM, CHEVRON, SEARCH, POWER, MOON, TIMER, SPEAKER, ACCESS, HOME, PREV, NEXT, PAUSE, SLIDERS, IMAGE }
 
 @Composable
 fun Icon(kind: Ic, size: Dp, color: Color = Color.White, modifier: Modifier = Modifier) {
@@ -207,6 +207,62 @@ private fun DrawScope.drawIcon(kind: Ic, color: Color) {
             drawCircle(color, radius = w * 0.42f, style = line)
             drawLine(color, Offset(w * 0.5f, h * 0.46f), Offset(w * 0.5f, h * 0.72f), sw, StrokeCap.Round)
             drawCircle(color, radius = sw * 0.75f, center = Offset(w * 0.5f, h * 0.3f))
+        }
+        Ic.POWER -> {
+            drawArc(color, -50f, 280f, false, Offset(w * 0.16f, h * 0.18f), Size(w * 0.68f, h * 0.68f), style = line)
+            drawLine(color, Offset(w * 0.5f, h * 0.1f), Offset(w * 0.5f, h * 0.48f), sw, StrokeCap.Round)
+        }
+        Ic.MOON -> {
+            val m = Path().apply {
+                moveTo(w * 0.62f, h * 0.12f)
+                cubicTo(w * 0.2f, h * 0.18f, w * 0.18f, h * 0.84f, w * 0.62f, h * 0.88f)
+                cubicTo(w * 0.42f, h * 0.7f, w * 0.42f, h * 0.3f, w * 0.62f, h * 0.12f)
+                close()
+            }
+            drawPath(m, color, style = line)
+        }
+        Ic.TIMER -> {
+            drawCircle(color, radius = w * 0.36f, center = Offset(w * 0.5f, h * 0.55f), style = line)
+            drawLine(color, Offset(w * 0.5f, h * 0.55f), Offset(w * 0.5f, h * 0.34f), sw, StrokeCap.Round)
+            drawLine(color, Offset(w * 0.5f, h * 0.55f), Offset(w * 0.66f, h * 0.62f), sw, StrokeCap.Round)
+            drawLine(color, Offset(w * 0.4f, h * 0.08f), Offset(w * 0.6f, h * 0.08f), sw, StrokeCap.Round)
+        }
+        Ic.SPEAKER -> {
+            drawPath(p(0.12f to 0.38f, 0.3f to 0.38f, 0.52f to 0.18f, 0.52f to 0.82f, 0.3f to 0.62f, 0.12f to 0.62f, close = true), color, style = line)
+            drawArc(color, -45f, 90f, false, Offset(w * 0.46f, h * 0.3f), Size(w * 0.3f, h * 0.4f), style = line)
+            drawArc(color, -45f, 90f, false, Offset(w * 0.42f, h * 0.16f), Size(w * 0.5f, h * 0.68f), style = line)
+        }
+        Ic.ACCESS -> {
+            drawCircle(color, radius = w * 0.08f, center = Offset(w * 0.5f, h * 0.16f))
+            drawLine(color, Offset(w * 0.18f, h * 0.34f), Offset(w * 0.82f, h * 0.34f), sw, StrokeCap.Round)
+            drawLine(color, Offset(w * 0.5f, h * 0.34f), Offset(w * 0.5f, h * 0.6f), sw, StrokeCap.Round)
+            drawLine(color, Offset(w * 0.5f, h * 0.6f), Offset(w * 0.32f, h * 0.88f), sw, StrokeCap.Round)
+            drawLine(color, Offset(w * 0.5f, h * 0.6f), Offset(w * 0.68f, h * 0.88f), sw, StrokeCap.Round)
+        }
+        Ic.HOME -> drawPath(p(0.14f to 0.48f, 0.5f to 0.16f, 0.86f to 0.48f, 0.76f to 0.48f, 0.76f to 0.84f, 0.24f to 0.84f, 0.24f to 0.48f, close = true), color, style = line)
+        Ic.PREV -> {
+            drawPath(p(0.82f to 0.2f, 0.36f to 0.5f, 0.82f to 0.8f, close = true), color)
+            drawLine(color, Offset(w * 0.24f, h * 0.2f), Offset(w * 0.24f, h * 0.8f), sw * 1.4f, StrokeCap.Round)
+        }
+        Ic.NEXT -> {
+            drawPath(p(0.18f to 0.2f, 0.64f to 0.5f, 0.18f to 0.8f, close = true), color)
+            drawLine(color, Offset(w * 0.76f, h * 0.2f), Offset(w * 0.76f, h * 0.8f), sw * 1.4f, StrokeCap.Round)
+        }
+        Ic.PAUSE -> {
+            drawRoundRect(color, Offset(w * 0.24f, h * 0.18f), Size(w * 0.17f, h * 0.64f), CornerRadius(w * 0.04f))
+            drawRoundRect(color, Offset(w * 0.59f, h * 0.18f), Size(w * 0.17f, h * 0.64f), CornerRadius(w * 0.04f))
+        }
+        Ic.SLIDERS -> {
+            for ((i, y) in listOf(0.28f, 0.5f, 0.72f).withIndex()) {
+                drawLine(color, Offset(w * 0.14f, h * y), Offset(w * 0.86f, h * y), sw, StrokeCap.Round)
+                val x = listOf(0.34f, 0.66f, 0.46f)[i]
+                drawCircle(color, radius = w * 0.08f, center = Offset(w * x, h * y))
+            }
+        }
+        Ic.IMAGE -> {
+            drawRoundRect(color, Offset(w * 0.1f, h * 0.18f), Size(w * 0.8f, h * 0.64f), CornerRadius(w * 0.08f), style = line)
+            drawPath(p(0.16f to 0.74f, 0.4f to 0.48f, 0.56f to 0.64f, 0.68f to 0.54f, 0.86f to 0.74f), color, style = line)
+            drawCircle(color, radius = w * 0.06f, center = Offset(w * 0.68f, h * 0.34f))
         }
         Ic.SEARCH -> {
             drawCircle(color, radius = w * 0.26f, center = Offset(w * 0.43f, h * 0.43f), style = line)

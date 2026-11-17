@@ -76,6 +76,21 @@ class UiState {
     var paletteIndex by mutableIntStateOf(0)
     var watchTick by mutableIntStateOf(0)
     var settingsTick by mutableIntStateOf(0)
+    // overlays
+    var controlOpen by mutableStateOf(false)
+    var profilePicker by mutableStateOf(false)
+    var screensaver by mutableStateOf(false)
+    // control center
+    var wifi by mutableStateOf("")
+    var dnd by mutableStateOf(false)
+    var sleepMinutes by mutableIntStateOf(0)
+    var nowPlaying by mutableStateOf<NowPlaying?>(null)
+    // profiles & screensaver
+    var profiles by mutableStateOf<List<Profile>>(emptyList())
+    var currentProfile by mutableStateOf(Profile("p1", "Ich", 0))
+    var saverMode by mutableIntStateOf(0)
+    var saverMinutes by mutableIntStateOf(5)
+    var saverUrls by mutableStateOf<List<String>>(emptyList())
 }
 
 data class SettingItem(val id: String, val label: String, val value: String = "", val chevron: Boolean = true)
@@ -101,6 +116,24 @@ interface Actions {
     fun selectTab(t: Tab)
     fun back()
     fun version(): String
+    // control center
+    fun openControl()
+    fun closeOverlays()
+    fun standby()
+    fun openWifi()
+    fun toggleDnd()
+    fun cycleSleep()
+    fun openSound()
+    fun openAccessibility()
+    fun media(keyCode: Int)
+    fun refreshNowPlaying()
+    // profiles & screensaver
+    fun openProfiles()
+    fun selectProfile(p: Profile)
+    fun addProfile()
+    fun profileMenu(p: Profile)
+    fun setSaverMode(mode: Int)
+    fun cycleSaverMinutes()
 }
 
 private const val SIDE = 40
@@ -121,16 +154,21 @@ fun LimadRoot(s: UiState, a: Actions) {
     ) {
         val detail = s.detail
         when {
+            s.profilePicker -> ProfilePicker(s, a)
             s.settingsOpen -> SettingsScreen(s, a)
             detail != null -> DetailScreen(detail, s, a)
             s.tab == Tab.START -> StartScreen(s, a)
+            s.tab == Tab.ENTDECKEN -> DiscoverScreen(s, a)
             s.tab == Tab.FILME -> BrowseScreen("movie", s, a)
             s.tab == Tab.SERIEN -> BrowseScreen("tv", s, a)
+            s.tab == Tab.LISTE -> ListScreen(s, a)
             s.tab == Tab.APPS -> AppsScreen(s, a)
             else -> SearchScreen(s, a)
         }
+        if (s.controlOpen && !s.screensaver) ControlCenter(s, a)
+        if (s.screensaver) Screensaver(if (s.saverMode == 1) s.saverUrls else emptyList())
     }
-    BackHandler(enabled = s.settingsOpen || s.detail != null || s.tab != Tab.START) { a.back() }
+    BackHandler(enabled = s.controlOpen || s.settingsOpen || s.detail != null || s.tab != Tab.START || (s.profilePicker && s.profiles.size > 0)) { a.back() }
 }
 
 @Composable
@@ -138,10 +176,14 @@ private fun TabBar(s: UiState, a: Actions, tabFocus: FocusRequester? = null) {
     TopBar(
         tab = s.tab,
         onTab = a::selectTab,
-        onBell = a::bell,
-        onAvatar = { a.openSettings(4) },
+        onBell = null,
+        onAvatar = a::openProfiles,
         onBack = null,
         tabModifier = { t -> if (t == s.tab && tabFocus != null) Modifier.focusRequester(tabFocus) else Modifier },
+        onSearch = { a.selectTab(Tab.SUCHE) },
+        onControl = a::openControl,
+        wifi = s.wifi,
+        profile = s.currentProfile,
     )
 }
 
@@ -236,74 +278,273 @@ private fun Dots(count: Int, index: Int) {
 
 // ---------------------------------------------------------------- Start
 
+/** One slide of the start hero: brand slide on a nature image, or a TMDB title. */
+private data class StartSlide(val image: Int?, val title: Title?)
+
 @Composable
 fun StartScreen(s: UiState, a: Actions) {
-    val heroes by produceState(emptyList<Title>(), s.services) {
-        value = Tmdb.interleave(*s.services.take(5).map { (app, id) -> Tmdb.popularOn(a.ctx, id, app.label).take(3) }.toTypedArray()).take(6)
+    val titles by produceState(emptyList<Title>(), s.services) {
+        value = Tmdb.interleave(*s.services.take(4).map { (app, id) -> Tmdb.popularOn(a.ctx, id, app.label).take(2) }.toTypedArray()).take(2)
     }
+    val slides = listOf(StartSlide(NatureImages[0], null)) +
+        (if (titles.isNotEmpty()) titles.map { StartSlide(null, it) } else NatureImages.drop(1).take(2).map { StartSlide(it, null) })
     var heroFocus by remember { mutableStateOf(false) }
-    val idx = rememberRotation(heroes, heroFocus)
-    val hero = heroes.getOrNull(idx)
-    val logo = rememberHeroLogo(a, hero)
+    var idx by remember(slides.size) { mutableIntStateOf(0) }
+    LaunchedEffect(slides.size, heroFocus) {
+        while (slides.size > 1 && !heroFocus) {
+            delay(10_000)
+            idx = (idx + 1) % slides.size
+        }
+    }
+    val slide = slides[idx.coerceIn(0, slides.size - 1)]
+    val logo = rememberHeroLogo(a, slide.title)
     val dockFocus = remember { FocusRequester() }
-    val watch = remember(s.watchTick) { a.watchlist() }
 
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        Backdrop(hero?.backdropUrl("w1280"), Modifier.fillMaxWidth().height(maxHeight * 0.8f), Palettes[s.paletteIndex].bottom)
+    Box(Modifier.fillMaxSize()) {
+        // background
+        AnimatedContent(slide, transitionSpec = { fadeIn(tween(900)) togetherWith fadeOut(tween(600)) }, label = "startBg") { sl ->
+            Box(Modifier.fillMaxSize()) {
+                if (sl.title != null) {
+                    AsyncImage(sl.title.backdropUrl("w1280"), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                } else {
+                    Image(painterResource(sl.image ?: NatureImages[0]), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                }
+            }
+        }
+        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Color(0xCC050914), 0.6f to Color(0x00050914))))
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color(0x66050914), 0.25f to Color.Transparent, 0.55f to Color.Transparent, 1f to Color(0xE6050914))))
+
         Column(Modifier.fillMaxSize()) {
             TabBar(s, a)
-            LazyColumn(contentPadding = PaddingValues(bottom = 56.dp), modifier = Modifier.fillMaxSize()) {
-                item(key = "hero") {
-                    HeroInfo(
-                        hero, logo, Tmdb.hasToken(a.ctx),
-                        onPlay = { hero?.let { a.play(it, emptyList()) } },
-                        onInfo = { hero?.let(a::openDetail) },
-                        onFocus = { heroFocus = it },
-                        playFocus = null,
-                        modifier = Modifier.fillMaxWidth().height(this@BoxWithConstraints.maxHeight * 0.44f),
-                    )
-                }
-                item(key = "dock") {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
-                            modifier = Modifier
-                                .padding(horizontal = (SIDE - 14).dp)
-                                .fillMaxWidth()
-                                .glass(RoundedCornerShape(26.dp)),
-                        ) {
-                            items(s.favorites, key = { it.pkg }) { app ->
-                                AppTile(
-                                    app, 136.dp, { a.openApp(app) }, { a.appMenu(app) },
-                                    modifier = if (app == s.favorites.first()) Modifier.focusRequester(dockFocus) else Modifier,
-                                )
+            // hero text
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                AnimatedContent(
+                    slide to logo,
+                    transitionSpec = { fadeIn(tween(600)) togetherWith fadeOut(tween(300)) },
+                    label = "startText",
+                    modifier = Modifier.align(Alignment.CenterStart).padding(start = SIDE.dp + 4.dp, top = 10.dp),
+                ) { (sl, lg) ->
+                    Column(Modifier.widthIn(max = 600.dp)) {
+                        val t = sl.title
+                        if (t == null) {
+                            BasicText("NEU ENTDECKEN · LIMAD-TV", style = ts(13, FontWeight.SemiBold, Color(0xE6FFFFFF)).copy(letterSpacing = 3.sp))
+                            Spacer(Modifier.height(12.dp))
+                            BasicText("Eine Welt voller", style = ts(48, FontWeight.Black).copy(lineHeight = 52.sp))
+                            BasicText("Entdeckungen.", style = ts(48, FontWeight.Black, C.BlueLight).copy(lineHeight = 52.sp))
+                            Spacer(Modifier.height(12.dp))
+                            BasicText("Filme, Serien und deine Lieblingsapps.\nAlles an einem Ort – auf LiMaD-TV.", style = ts(17, color = Color(0xF2FFFFFF)).copy(lineHeight = 24.sp))
+                            Spacer(Modifier.height(20.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                PillButton("Entdecken", Ic.PLAY, true, { a.selectTab(Tab.ENTDECKEN) }, onFocus = { heroFocus = it })
+                                PillButton("Mehr erfahren", Ic.INFO, false, { a.selectTab(Tab.APPS) }, onFocus = { heroFocus = it })
                             }
-                            item(key = "plus") {
-                                ActionTile(
-                                    "Apps", Ic.PLUS, null, Color(0xFF3A4566), 136.dp, { a.selectTab(Tab.APPS) },
-                                    showLabel = false,
-                                    modifier = if (s.favorites.isEmpty()) Modifier.focusRequester(dockFocus) else Modifier,
-                                )
+                        } else {
+                            BasicText(
+                                "JETZT BELIEBT" + (t.service?.let { " · AUF ${it.uppercase()}" } ?: ""),
+                                style = ts(13, FontWeight.SemiBold, Color(0xE6FFFFFF)).copy(letterSpacing = 3.sp),
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            if (lg != null) {
+                                AsyncImage(lg, t.title, contentScale = ContentScale.Fit, alignment = Alignment.BottomStart, modifier = Modifier.heightIn(max = 120.dp).widthIn(max = 460.dp))
+                            } else {
+                                BasicText(t.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = ts(48, FontWeight.Black).copy(lineHeight = 52.sp))
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            BasicText(t.overview, maxLines = 2, overflow = TextOverflow.Ellipsis, style = ts(16, color = Color(0xE6FFFFFF)).copy(lineHeight = 22.sp))
+                            Spacer(Modifier.height(20.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                PillButton("Abspielen", Ic.PLAY, true, { a.play(t, emptyList()) }, onFocus = { heroFocus = it })
+                                PillButton("Mehr Infos", Ic.INFO, false, { a.openDetail(t) }, onFocus = { heroFocus = it })
                             }
                         }
-                        Spacer(Modifier.height(12.dp))
-                        Dots(heroes.size, idx)
                     }
                 }
-                if (watch.isNotEmpty()) item(key = "watch") { Shelf("Meine Merkliste", watch, a::openDetail) }
-                s.services.take(6).forEach { (app, id) ->
-                    item(key = "svc$id") {
-                        val list by produceState(emptyList<Title>(), id) { value = Tmdb.popularOn(a.ctx, id, app.label) }
-                        Shelf("Beliebt auf ${app.label}", list, a::openDetail)
+            }
+            // "Deine Apps"
+            Column(
+                Modifier
+                    .padding(horizontal = SIDE.dp)
+                    .fillMaxWidth()
+                    .glass(RoundedCornerShape(26.dp), strong = true)
+                    .padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 4.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    BasicText("Deine Apps", Modifier.weight(1f), style = ts(17, FontWeight.Bold))
+                    LinkText("Alle Apps ansehen") { a.selectTab(Tab.APPS) }
+                }
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(vertical = 14.dp, horizontal = 2.dp)) {
+                    items(s.favorites, key = { it.pkg }) { app ->
+                        AppTile(
+                            app, 122.dp, { a.openApp(app) }, { a.appMenu(app) },
+                            modifier = if (app == s.favorites.first()) Modifier.focusRequester(dockFocus) else Modifier,
+                            forceLabel = true,
+                        )
+                    }
+                    item(key = "meteo") { ActionTile("LiMeteo", null, "⛅", Color(0xFF2F6FD8), 122.dp, a::openMeteo) }
+                    item(key = "all") {
+                        ActionTile(
+                            "Apps", Ic.GRID, null, Color(0xFF3A4566), 122.dp, { a.selectTab(Tab.APPS) },
+                            modifier = if (s.favorites.isEmpty()) Modifier.focusRequester(dockFocus) else Modifier,
+                        )
                     }
                 }
+            }
+            // footer
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(horizontal = (SIDE + 8).dp, vertical = 14.dp)) {
+                BasicText("LIMAD EXPERIENCE  •  CINEMATIC HOME", Modifier.weight(1f), style = ts(11, FontWeight.Medium, Color(0xB3FFFFFF)).copy(letterSpacing = 1.5.sp))
+                Dots(slides.size, idx)
+                Spacer(Modifier.width(14.dp))
+                BasicText("Steuerkreuz zum Navigieren · ☰ Kontrollzentrum", style = ts(11, color = Color(0xB3FFFFFF)))
             }
         }
     }
     LaunchedEffect(Unit) {
         delay(250)
         runCatching { dockFocus.requestFocus() }
+    }
+}
+
+@Composable
+private fun LinkText(label: String, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (focused) Color.White else Color.Transparent)
+            .onFocusChanged { focused = it.isFocused }
+            .okKeys(onClick)
+            .focusable()
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+    ) {
+        BasicText(label, style = ts(13, FontWeight.Medium, if (focused) C.Ink else Color(0xE6FFFFFF), shadow = !focused))
+        Spacer(Modifier.width(4.dp))
+        Icon(Ic.CHEVRON, 10.dp, if (focused) C.Ink else Color.White)
+    }
+}
+
+// ---------------------------------------------------------------- Entdecken
+
+@Composable
+fun DiscoverScreen(s: UiState, a: Actions) {
+    val ids = s.services.map { it.second }
+    val picks by produceState(emptyList<Title>(), s.services) {
+        value = Tmdb.interleave(*s.services.take(4).map { (app, id) -> Tmdb.popularOn(a.ctx, id, app.label).take(2) }.toTypedArray()).take(3)
+    }
+    var cardFocus by remember { mutableStateOf(false) }
+    val idx = rememberRotation(picks, cardFocus)
+    val pick = picks.getOrNull(idx)
+    val logo = rememberHeroLogo(a, pick)
+    val playFocus = remember { FocusRequester() }
+    val tabFocus = remember { FocusRequester() }
+    val watch = remember(s.watchTick) { a.watchlist() }
+    var watching by remember(pick?.key, s.watchTick) { mutableStateOf(pick?.let(a::inWatch) ?: false) }
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            TabBar(s, a, tabFocus)
+            LazyColumn(contentPadding = PaddingValues(bottom = 48.dp), modifier = Modifier.fillMaxSize()) {
+                item(key = "card") {
+                    val shape = RoundedCornerShape(26.dp)
+                    Box(
+                        Modifier
+                            .padding(horizontal = SIDE.dp, vertical = 8.dp)
+                            .fillMaxWidth()
+                            .height(this@BoxWithConstraints.maxHeight * 0.4f)
+                            .glow(cardFocus, radius = 16.dp, corner = 26.dp)
+                            .clip(shape)
+                            .border(1.dp, C.GlassBorder, shape)
+                    ) {
+                        Backdrop(pick?.backdropUrl("w1280"), Modifier.fillMaxSize(), Palettes[s.paletteIndex].bottom)
+                        Column(Modifier.align(Alignment.CenterStart).padding(start = 30.dp).widthIn(max = 520.dp)) {
+                            BasicText("EMPFOHLEN FÜR DICH", style = ts(12, FontWeight.Bold, C.BlueLight).copy(letterSpacing = 2.5.sp))
+                            Spacer(Modifier.height(8.dp))
+                            if (logo != null) {
+                                AsyncImage(logo, pick?.title, contentScale = ContentScale.Fit, alignment = Alignment.CenterStart, modifier = Modifier.heightIn(max = 90.dp).widthIn(max = 400.dp))
+                            } else {
+                                BasicText(pick?.title ?: "Titel werden geladen …", maxLines = 2, overflow = TextOverflow.Ellipsis, style = ts(38, FontWeight.Black).copy(lineHeight = 42.sp))
+                            }
+                            if (pick != null) {
+                                Spacer(Modifier.height(8.dp))
+                                BasicText(
+                                    listOfNotNull(if (pick.type == "tv") "Serie" else "Film", pick.year.ifBlank { null }, pick.service, rating(pick.rating).ifBlank { null }).joinToString(" · "),
+                                    style = ts(14, FontWeight.Medium, Color(0xE6FFFFFF)),
+                                )
+                                Spacer(Modifier.height(14.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    PillButton("Abspielen", Ic.PLAY, true, { a.play(pick, emptyList()) }, Modifier.focusRequester(playFocus), onFocus = { cardFocus = it })
+                                    PillButton(if (watching) "In Merkliste" else "Merkliste", if (watching) Ic.CHECK else Ic.PLUS, false, { watching = a.toggleWatch(pick) }, onFocus = { cardFocus = it })
+                                    PillButton("Mehr Infos", Ic.INFO, false, { a.openDetail(pick) }, onFocus = { cardFocus = it })
+                                }
+                            }
+                        }
+                        Row(Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Dots(picks.size, idx)
+                            Spacer(Modifier.width(10.dp))
+                            BasicText("Titelauswahl", style = ts(11, color = Color(0xB3FFFFFF)))
+                        }
+                    }
+                }
+                if (watch.isNotEmpty()) item(key = "watch") { Shelf("Meine Liste", watch, a::openDetail) }
+                item(key = "top10tv") {
+                    val list by produceState(emptyList<Title>(), ids) { value = Tmdb.discover(a.ctx, "tv", ids).take(10) }
+                    RankShelf("Top 10 Serien", list, a::openDetail)
+                }
+                item(key = "top10movie") {
+                    val list by produceState(emptyList<Title>(), ids) { value = Tmdb.discover(a.ctx, "movie", ids).take(10) }
+                    RankShelf("Top 10 Filme", list, a::openDetail)
+                }
+                item(key = "trend") {
+                    val list by produceState(emptyList<Title>()) { value = Tmdb.trending(a.ctx, "all") }
+                    Shelf("Im Trend diese Woche", list, a::openDetail)
+                }
+            }
+        }
+    }
+    LaunchedEffect(pick != null) {
+        delay(200)
+        runCatching { if (pick != null) playFocus.requestFocus() else tabFocus.requestFocus() }
+    }
+}
+
+@Composable
+private fun RankShelf(title: String, items: List<Title>, onOpen: (Title) -> Unit) {
+    if (items.isEmpty()) return
+    Column(Modifier.padding(top = 10.dp)) {
+        BasicText("$title  ›", Modifier.padding(start = SIDE.dp), style = ts(20, FontWeight.Bold))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(horizontal = SIDE.dp, vertical = 16.dp)) {
+            items(items.size) { i -> RankCard(i + 1, items[i], 190.dp) { onOpen(items[i]) } }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Meine Liste
+
+@Composable
+fun ListScreen(s: UiState, a: Actions) {
+    val watch = remember(s.watchTick, s.currentProfile.id) { a.watchlist() }
+    val tabFocus = remember { FocusRequester() }
+    Column(Modifier.fillMaxSize()) {
+        TabBar(s, a, tabFocus)
+        BasicText("Meine Liste · ${s.currentProfile.name}", Modifier.padding(start = SIDE.dp, top = 8.dp), style = ts(26, FontWeight.Bold))
+        if (watch.isEmpty()) {
+            BasicText(
+                "Noch nichts gemerkt. Auf einem Titel „Merkliste“ drücken – er erscheint dann hier.",
+                Modifier.padding(SIDE.dp),
+                style = ts(17, color = C.Muted),
+            )
+        } else {
+            LazyColumn(contentPadding = PaddingValues(start = SIDE.dp, end = SIDE.dp, top = 16.dp, bottom = 48.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
+                val rows = watch.chunked(4)
+                items(rows.size) { r ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) { rows[r].forEach { t -> PosterCard(t, 205.dp, { a.openDetail(t) }) } }
+                }
+            }
+        }
+    }
+    LaunchedEffect(Unit) {
+        delay(200)
+        runCatching { tabFocus.requestFocus() }
     }
 }
 
@@ -493,7 +734,7 @@ fun DetailScreen(t: Title, s: UiState, a: Actions) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         Backdrop(title.backdropUrl("w1280"), Modifier.fillMaxSize(), Palettes[s.paletteIndex].bottom)
         Column(Modifier.fillMaxSize()) {
-            TopBar(tab = null, onTab = {}, onBell = null, onAvatar = { a.openSettings(4) }, onBack = a::back)
+            TopBar(tab = null, onTab = {}, onBell = null, onAvatar = a::openProfiles, onBack = a::back, profile = s.currentProfile)
             LazyColumn(contentPadding = PaddingValues(bottom = 40.dp), modifier = Modifier.fillMaxSize()) {
                 item(key = "info") {
                     Box(Modifier.fillMaxWidth().height(this@BoxWithConstraints.maxHeight * 0.6f)) {
@@ -549,6 +790,7 @@ private val SECTIONS = listOf(
     Ic.WIFI to "Netzwerk",
     Ic.GRID to "Apps",
     Ic.PERSON to "Benutzer & Profile",
+    Ic.IMAGE to "Bildschirmschoner",
     Ic.SYSTEM to "System",
 )
 
@@ -558,7 +800,7 @@ fun SettingsScreen(s: UiState, a: Actions) {
     val rows = remember(s.settingsSection, s.settingsTick, s.paletteIndex, s.weather) { a.settingRows(s.settingsSection) }
 
     Column(Modifier.fillMaxSize()) {
-        TopBar(tab = null, onTab = {}, onBell = null, onAvatar = { s.settingsSection = 4 }, onBack = a::back)
+        TopBar(tab = null, onTab = {}, onBell = null, onAvatar = a::openProfiles, onBack = a::back, profile = s.currentProfile)
         BasicText("Einstellungen", Modifier.padding(start = (SIDE + 4).dp, top = 4.dp, bottom = 18.dp), style = ts(34, FontWeight.Bold))
         Row(Modifier.fillMaxSize().padding(start = SIDE.dp, end = SIDE.dp, bottom = 32.dp)) {
             Column(

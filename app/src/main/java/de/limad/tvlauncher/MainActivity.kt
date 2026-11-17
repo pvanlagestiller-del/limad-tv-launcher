@@ -7,8 +7,10 @@ import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.text.InputType
+import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.Toast
@@ -18,6 +20,7 @@ import androidx.activity.compose.setContent
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.net.Inet4Address
@@ -28,6 +31,9 @@ class MainActivity : ComponentActivity(), Actions {
     private lateinit var favStore: Favorites
     private lateinit var user: UserStore
     private var allApps: List<AppEntry> = emptyList()
+    private var lastInput = SystemClock.elapsedRealtime()
+    private var sleepJob: Job? = null
+    private var askedProfile = false
 
     override val ctx: Context get() = this
 
@@ -36,6 +42,9 @@ class MainActivity : ComponentActivity(), Actions {
         favStore = Favorites(this)
         user = UserStore(this)
         ui.paletteIndex = user.paletteIndex
+        ui.saverMode = user.saverMode
+        ui.saverMinutes = user.saverMinutes
+        loadProfiles()
         handleIntent(intent)
 
         // Lowest-priority back handler: a launcher never closes itself.
@@ -53,22 +62,55 @@ class MainActivity : ComponentActivity(), Actions {
                 }
             }
         }
+        // Idle watcher → screensaver.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                while (true) {
+                    delay(15_000)
+                    ui.wifi = networkInfo()
+                    val idle = SystemClock.elapsedRealtime() - lastInput
+                    if (!ui.screensaver && !ui.dnd && ui.saverMode != 2 && idle > ui.saverMinutes * 60_000L) startSaver()
+                }
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
-        // Home pressed while inside the launcher: back to Start.
-        if (intent.hasCategory(Intent.CATEGORY_HOME) || intent.getStringExtra("tmdb_token") == null) {
+        if (intent.getStringExtra("tmdb_token") == null) {
+            // Home pressed: back to Start.
             ui.detail = null
             ui.settingsOpen = false
+            ui.controlOpen = false
+            ui.screensaver = false
             ui.tab = Tab.START
         }
     }
 
     override fun onResume() {
         super.onResume()
+        lastInput = SystemClock.elapsedRealtime()
+        ui.screensaver = false
+        ui.wifi = networkInfo()
         reload()
+        if (!askedProfile && user.askProfileOnStart && ui.profiles.size > 1) ui.profilePicker = true
+        askedProfile = true
+    }
+
+    /** Every key resets the idle timer; any key ends the screensaver; ☰ opens the control center. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        lastInput = SystemClock.elapsedRealtime()
+        if (ui.screensaver) {
+            if (event.action == KeyEvent.ACTION_UP) ui.screensaver = false
+            return true
+        }
+        if (event.keyCode == KeyEvent.KEYCODE_MENU && event.action == KeyEvent.ACTION_UP) {
+            if (ui.controlOpen) closeOverlays() else openControl()
+            return true
+        }
+        if (event.keyCode == KeyEvent.KEYCODE_MENU) return true
+        return super.dispatchKeyEvent(event)
     }
 
     /** Setup wizard sends the TMDB token: am start -n de.limad.tvlauncher/.MainActivity --es tmdb_token … */
@@ -81,6 +123,11 @@ class MainActivity : ComponentActivity(), Actions {
         }
     }
 
+    private fun loadProfiles() {
+        ui.profiles = user.profiles()
+        ui.currentProfile = user.current()
+    }
+
     private fun reload() {
         val all = AppRepository.load(this)
         allApps = all
@@ -91,7 +138,6 @@ class MainActivity : ComponentActivity(), Actions {
         ui.favorites = favStore.get(visible).mapNotNull { byPkg[it] }
         ui.settingsTick++
         lifecycleScope.launch {
-            // Services in favourites order first, then the rest.
             val ordered = ui.favorites + visible.filter { v -> ui.favorites.none { it.pkg == v.pkg } }
             val found = ArrayList<Pair<AppEntry, Int>>()
             for (app in ordered) {
@@ -118,7 +164,7 @@ class MainActivity : ComponentActivity(), Actions {
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
-    // ------------------------------------------------------------------ Actions: apps
+    // ------------------------------------------------------------------ Apps
 
     override fun openApp(app: AppEntry) {
         favStore.lastOpened = app.pkg
@@ -183,7 +229,7 @@ class MainActivity : ComponentActivity(), Actions {
             .show()
     }
 
-    // ------------------------------------------------------------------ Actions: titles
+    // ------------------------------------------------------------------ Titles
 
     override fun openDetail(t: Title) {
         ui.detail = t
@@ -242,12 +288,11 @@ class MainActivity : ComponentActivity(), Actions {
         ui.tab = Tab.SUCHE
     }
 
-    /** Bell: what's new and popular today. */
     override fun bell() {
         lifecycleScope.launch {
             val list = Tmdb.trending(this@MainActivity, "all").take(8)
             if (list.isEmpty()) {
-                toast(if (Tmdb.hasToken(this@MainActivity)) "Keine neuen Mitteilungen" else "Mitteilungen brauchen TMDB (Einstellungen → Apps)")
+                toast("Keine neuen Mitteilungen")
                 return@launch
             }
             AlertDialog.Builder(this@MainActivity)
@@ -267,6 +312,8 @@ class MainActivity : ComponentActivity(), Actions {
 
     override fun back() {
         when {
+            ui.controlOpen -> ui.controlOpen = false
+            ui.profilePicker -> ui.profilePicker = false
             ui.settingsOpen -> ui.settingsOpen = false
             ui.detail != null -> ui.detail = null
             ui.tab != Tab.START -> ui.tab = Tab.START
@@ -274,6 +321,7 @@ class MainActivity : ComponentActivity(), Actions {
     }
 
     override fun openSettings(section: Int) {
+        ui.controlOpen = false
         ui.settingsSection = section
         ui.settingsOpen = true
     }
@@ -281,7 +329,133 @@ class MainActivity : ComponentActivity(), Actions {
     override fun version(): String =
         runCatching { packageManager.getPackageInfo(packageName, 0).versionName ?: "" }.getOrDefault("")
 
+    // ------------------------------------------------------------------ Control center
+
+    override fun openControl() {
+        ui.nowPlaying = Media.nowPlaying(this)
+        ui.controlOpen = true
+    }
+
+    override fun closeOverlays() {
+        ui.controlOpen = false
+    }
+
+    /** No app may put Fire OS to sleep; "Standby" rests the screen with the screensaver. */
+    override fun standby() {
+        ui.controlOpen = false
+        startSaver()
+        toast("Echter Standby: Home-Taste lange drücken → Ruhezustand")
+    }
+
+    private fun startSaver() {
+        if (ui.saverMode == 1) {
+            lifecycleScope.launch {
+                val urls = (user.watchlist() + Tmdb.trending(this@MainActivity, "all")).mapNotNull { it.backdropUrl("w1280") }.distinct().take(12)
+                ui.saverUrls = urls
+                ui.screensaver = true
+            }
+        } else {
+            ui.saverUrls = emptyList()
+            ui.screensaver = true
+        }
+    }
+
+    override fun openWifi() = start(Intent(Settings.ACTION_WIFI_SETTINGS), Intent(Settings.ACTION_SETTINGS))
+
+    override fun toggleDnd() {
+        ui.dnd = !ui.dnd
+    }
+
+    /** Sleep timer: pauses playback and starts the screensaver when it runs out. */
+    override fun cycleSleep() {
+        val steps = listOf(0, 15, 30, 60, 90)
+        ui.sleepMinutes = steps[(steps.indexOf(ui.sleepMinutes) + 1) % steps.size]
+        sleepJob?.cancel()
+        if (ui.sleepMinutes > 0) {
+            val minutes = ui.sleepMinutes
+            sleepJob = lifecycleScope.launch {
+                delay(minutes * 60_000L)
+                Media.key(this@MainActivity, KeyEvent.KEYCODE_MEDIA_PAUSE)
+                ui.sleepMinutes = 0
+                start(Intent(this@MainActivity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+                startSaver()
+            }
+        }
+    }
+
+    override fun openSound() = start(Intent(Settings.ACTION_SOUND_SETTINGS), Intent(Settings.ACTION_SETTINGS))
+
+    override fun openAccessibility() = start(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS), Intent(Settings.ACTION_SETTINGS))
+
+    override fun media(keyCode: Int) {
+        Media.key(this, keyCode)
+        lifecycleScope.launch {
+            delay(600)
+            refreshNowPlaying()
+        }
+    }
+
+    override fun refreshNowPlaying() {
+        ui.nowPlaying = Media.nowPlaying(this)
+    }
+
+    // ------------------------------------------------------------------ Profiles & screensaver
+
+    override fun openProfiles() {
+        loadProfiles()
+        ui.controlOpen = false
+        ui.profilePicker = true
+    }
+
+    override fun selectProfile(p: Profile) {
+        user.currentId = p.id
+        loadProfiles()
+        ui.watchTick++
+        ui.profilePicker = false
+        ui.tab = Tab.START
+    }
+
+    override fun addProfile() {
+        askText("Neues Profil", "") { name ->
+            val p = user.addProfile(name)
+            loadProfiles()
+            selectProfile(p)
+        }
+    }
+
+    override fun profileMenu(p: Profile) {
+        val options = if (ui.profiles.size > 1) arrayOf("Umbenennen", "Löschen") else arrayOf("Umbenennen")
+        AlertDialog.Builder(this)
+            .setTitle(p.name)
+            .setItems(options) { _, which ->
+                when (options[which]) {
+                    "Umbenennen" -> askText("Name", p.name) { user.renameProfile(p.id, it); loadProfiles() }
+                    "Löschen" -> AlertDialog.Builder(this)
+                        .setMessage("Profil „${p.name}“ mit Merkliste löschen?")
+                        .setPositiveButton("Löschen") { _, _ -> user.deleteProfile(p.id); loadProfiles(); ui.watchTick++ }
+                        .setNegativeButton("Abbrechen", null)
+                        .show()
+                }
+            }
+            .show()
+    }
+
+    override fun setSaverMode(mode: Int) {
+        ui.saverMode = mode
+        user.saverMode = mode
+        ui.settingsTick++
+    }
+
+    override fun cycleSaverMinutes() {
+        val steps = listOf(2, 5, 10, 15, 30)
+        ui.saverMinutes = steps[(steps.indexOf(ui.saverMinutes) + 1) % steps.size]
+        user.saverMinutes = ui.saverMinutes
+        ui.settingsTick++
+    }
+
     // ------------------------------------------------------------------ Settings
+
+    private val saverModes = listOf("Landschaften", "Titelbilder", "Aus")
 
     override fun settingRows(section: Int): List<SettingItem> = when (section) {
         0 -> listOf(
@@ -293,7 +467,7 @@ class MainActivity : ComponentActivity(), Actions {
         1 -> listOf(
             SettingItem("display", "Bild & Auflösung"),
             SettingItem("sound", "Ton & Audioausgabe"),
-            SettingItem("dream", "Bildschirmschoner"),
+            SettingItem("dream", "Fire-TV-Bildschirmschoner"),
         )
         2 -> listOf(
             SettingItem("none", "Status", networkInfo(), chevron = false),
@@ -306,9 +480,17 @@ class MainActivity : ComponentActivity(), Actions {
             SettingItem("fireapps", "Alle Apps verwalten (Fire OS)"),
         )
         4 -> listOf(
-            SettingItem("name", "Name", user.name.ifBlank { "Nicht festgelegt" }),
+            SettingItem("profiles", "Profil wechseln", ui.currentProfile.name),
+            SettingItem("rename", "Profil umbenennen", ui.currentProfile.name),
+            SettingItem("ask_profile", "Profilauswahl beim Start", if (user.askProfileOnStart) "An" else "Aus"),
             SettingItem("clear_watch", "Merkliste leeren", "${user.watchlist().size} Titel"),
             SettingItem("clear_likes", "Bewertungen zurücksetzen"),
+        )
+        5 -> listOf(
+            SettingItem("saver_mode", "Motiv", saverModes[ui.saverMode]),
+            SettingItem("saver_minutes", "Startet nach", "${ui.saverMinutes} Minuten"),
+            SettingItem("saver_now", "Jetzt starten"),
+            SettingItem("none", "Als Fire-TV-Bildschirmschoner", "über „LiMaD TV Einrichtung“", chevron = false),
         )
         else -> listOf(
             SettingItem("none", "Gerät", Build.MODEL, chevron = false),
@@ -330,15 +512,20 @@ class MainActivity : ComponentActivity(), Actions {
             "home", "manage" -> manageApps()
             "place" -> askPlace()
             "display" -> start(Intent(Settings.ACTION_DISPLAY_SETTINGS), fire)
-            "sound" -> start(Intent(Settings.ACTION_SOUND_SETTINGS), fire)
+            "sound" -> openSound()
             "dream" -> start(Intent(Settings.ACTION_DREAM_SETTINGS), fire)
-            "wifi" -> start(Intent(Settings.ACTION_WIFI_SETTINGS), fire)
+            "wifi" -> openWifi()
             "tmdb" -> toast(if (Tmdb.hasToken(this)) "TMDB ist aktiv" else "Token über „LiMaD TV Einrichtung“ am Rechner senden")
             "store" -> openStore()
             "fireapps" -> start(Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS), fire)
-            "name" -> askText("Dein Name", user.name) { user.name = it }
+            "profiles" -> { ui.settingsOpen = false; openProfiles() }
+            "rename" -> askText("Profilname", ui.currentProfile.name) { user.renameProfile(ui.currentProfile.id, it); loadProfiles() }
+            "ask_profile" -> user.askProfileOnStart = !user.askProfileOnStart
             "clear_watch" -> { user.clearWatchlist(); ui.watchTick++; toast("Merkliste geleert") }
             "clear_likes" -> { user.clearLikes(); toast("Bewertungen zurückgesetzt") }
+            "saver_mode" -> setSaverMode((ui.saverMode + 1) % saverModes.size)
+            "saver_minutes" -> cycleSaverMinutes()
+            "saver_now" -> { ui.settingsOpen = false; startSaver() }
             "updates" -> start(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS), fire)
             "fire" -> start(fire)
         }
