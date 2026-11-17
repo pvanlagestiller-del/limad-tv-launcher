@@ -28,13 +28,10 @@ class HomeButtonService : AccessibilityService() {
         val cls = event.className?.toString() ?: ""
         Log.d(TAG, "window $cls (systemUiAllowed=${systemUiAllowed()})")
         if (systemUiAllowed()) return
-        if (isAmazonHome(cls)) goHome()
-    }
-
-    private fun isAmazonHome(cls: String): Boolean {
-        val c = cls.lowercase()
-        if (c.contains("setting") || c.contains("dialog") || c.contains("search") || c.contains("profile")) return false
-        return c.contains("homeactivity") || c.endsWith(".home") || c.contains("launcheractivity") || c.contains("mainactivity")
+        // Class names differ between Fire OS builds, so every Amazon launcher window is redirected
+        // unless LiMaD-TV itself opened a Fire OS screen (see allowSystemUi).
+        if (cls.contains("Toast", ignoreCase = true)) return
+        goHome()
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
